@@ -1,0 +1,256 @@
+# 🤖 WhatsApp AI Chatbot — Complete Setup Guide
+
+**Stack:** FastAPI + LangChain + OpenAI + Supabase + Google Cloud Run
+
+---
+
+## OVERVIEW
+
+```
+WhatsApp User
+     │  sends message
+     ▼
+Meta WhatsApp Cloud API
+     │  POST /webhook
+     ▼
+Your FastAPI App  (Google Cloud Run)
+     │
+     ├── LangChain + OpenAI  →  generates AI reply
+     ├── Supabase            →  stores all messages
+     └── WhatsApp API        →  sends reply back
+```
+
+---
+
+## STEP 1 — Create Your Supabase Database (FREE)
+
+### 1.1 Create Account & Project
+1. Go to **https://supabase.com** → Click **Start for free**
+2. Sign up (GitHub login is easiest)
+3. Click **New project**
+   - Organization: your name
+   - Project name: `whatsapp-chatbot`
+   - Database Password: choose a strong password (save it!)
+   - Region: pick closest to your users (e.g. `Southeast Asia`)
+4. Click **Create new project** — wait ~2 minutes
+
+### 1.2 Run the Database Schema
+1. In your Supabase dashboard, click **SQL Editor** (left sidebar)
+2. Click **New query**
+3. Copy the entire contents of **`supabase_schema.sql`** and paste it
+4. Click **Run** (green button)
+5. You should see: `Success. No rows returned`
+
+### 1.3 Get Your API Keys
+1. Go to **Settings → API** (left sidebar)
+2. Copy these two values into your `.env` file:
+   - **Project URL** → `SUPABASE_URL`
+   - **service_role** key (under "Project API keys") → `SUPABASE_SERVICE_ROLE_KEY`
+   > ⚠️ Use the `service_role` key, NOT the `anon` key. The service role key bypasses Row Level Security, which is what your backend needs.
+
+---
+
+## STEP 2 — Configure Meta / WhatsApp
+
+### 2.1 Get Your WhatsApp Credentials
+1. Go to **https://developers.facebook.com**
+2. Select your app → **WhatsApp → API Setup**
+3. Copy:
+   - **Phone Number ID** → `WHATSAPP_PHONE_ID`
+   - **Temporary access token** (for testing) OR create a permanent System User token → `WHATSAPP_TOKEN`
+4. Go to **App Settings → Basic** → copy **App Secret** → `APP_SECRET`
+
+### 2.2 Set Your Verify Token
+- In your `.env`, set `VERIFY_TOKEN` to any string you like, e.g. `mybot_verify_2024`
+- You'll enter this same string in the Meta webhook configuration (Step 5)
+
+---
+
+## STEP 3 — Set Up the Project Locally
+
+```bash
+# Clone or create the project folder
+cd whatsapp-chatbot
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Copy env template and fill in your values
+cp .env.example .env
+nano .env                       # or open in VS Code
+```
+
+Fill in all values in `.env`:
+```
+WHATSAPP_TOKEN=...
+WHATSAPP_PHONE_ID=...
+APP_SECRET=...
+VERIFY_TOKEN=mybot_verify_2024
+OPENAI_API_KEY=sk-...
+SUPABASE_URL=https://xxxx.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=eyJ...
+```
+
+### 3.1 Test Locally
+```bash
+uvicorn main:app --reload --port 8000
+
+# In another terminal, test health check:
+curl http://localhost:8000/health
+# Expected: {"status":"running","service":"WhatsApp AI Chatbot"}
+```
+
+---
+
+## STEP 4 — Deploy to Google Cloud Run
+
+### 4.1 Install Google Cloud CLI
+```bash
+# macOS
+brew install --cask google-cloud-sdk
+
+# Linux
+curl https://sdk.cloud.google.com | bash
+exec -l $SHELL
+
+# Windows: download installer from https://cloud.google.com/sdk/install
+```
+
+### 4.2 Login & Set Project
+```bash
+gcloud auth login
+gcloud projects create whatsapp-chatbot-proj --name="WhatsApp Chatbot"
+gcloud config set project whatsapp-chatbot-proj
+
+# Enable billing at: https://console.cloud.google.com/billing
+# (Cloud Run free tier: 2M requests/month — sufficient for most bots)
+
+# Enable required APIs
+gcloud services enable run.googleapis.com
+gcloud services enable cloudbuild.googleapis.com
+```
+
+### 4.3 Deploy
+```bash
+# From inside the whatsapp-chatbot/ folder:
+gcloud run deploy whatsapp-chatbot \
+  --source . \
+  --platform managed \
+  --region asia-south1 \
+  --allow-unauthenticated \
+  --set-env-vars "WHATSAPP_TOKEN=YOUR_TOKEN,\
+WHATSAPP_PHONE_ID=YOUR_PHONE_ID,\
+APP_SECRET=YOUR_APP_SECRET,\
+VERIFY_TOKEN=mybot_verify_2024,\
+OPENAI_API_KEY=YOUR_OPENAI_KEY,\
+SUPABASE_URL=YOUR_SUPABASE_URL,\
+SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY"
+```
+
+> 💡 **Alternatively**, store secrets in Google Secret Manager for better security (recommended for production).
+
+### 4.4 Get Your Public URL
+After deploy completes, you'll see:
+```
+Service URL: https://whatsapp-chatbot-xxxxxxxxxx-uc.a.run.app
+```
+**Copy this URL** — you'll need it in Step 5.
+
+Test it:
+```bash
+curl https://your-url.a.run.app/health
+```
+
+---
+
+## STEP 5 — Connect Meta Webhook
+
+1. Go to **https://developers.facebook.com** → Your App → **WhatsApp → Configuration**
+2. Under **Webhook**, click **Edit**
+3. Set:
+   - **Callback URL**: `https://your-cloud-run-url.a.run.app/webhook`
+   - **Verify token**: same value as `VERIFY_TOKEN` in your `.env`
+4. Click **Verify and Save**
+   - Meta will call your `/webhook` GET endpoint — your app will respond and verification passes ✅
+5. Under **Webhook fields**, click **Manage** and subscribe to **messages**
+
+---
+
+## STEP 6 — Test End-to-End
+
+1. In Meta Dashboard → **WhatsApp → API Setup**, find your test number
+2. Add your personal WhatsApp number as a test recipient
+3. Send a WhatsApp message to your test number
+4. You should get an AI reply within seconds! 🎉
+
+### Check Supabase Data
+- Supabase Dashboard → **Table Editor → messages**
+- You'll see all conversations stored with phone numbers, roles, and timestamps
+- Use **Table Editor → contact_summary** view for a nice overview
+
+---
+
+## PROJECT FILE STRUCTURE
+
+```
+whatsapp-chatbot/
+├── main.py              # FastAPI app, webhook handler
+├── chatbot.py           # LangChain AI logic
+├── database.py          # Supabase read/write
+├── requirements.txt     # Python dependencies
+├── Dockerfile           # Container for Cloud Run
+├── .env.example         # Environment variable template
+├── .env                 # Your actual secrets (NEVER commit this!)
+└── supabase_schema.sql  # Run once in Supabase SQL Editor
+```
+
+---
+
+## CUSTOMIZING THE BOT
+
+### Change the AI personality
+Edit the `SYSTEM_PROMPT` in **`chatbot.py`** — this defines how the bot behaves.
+
+### Use a different LLM
+In `chatbot.py`, swap the LLM:
+```python
+# Anthropic Claude
+from langchain_anthropic import ChatAnthropic
+llm = ChatAnthropic(model="claude-3-5-haiku-20241022", api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+# Google Gemini
+from langchain_google_genai import ChatGoogleGenerativeAI
+llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=os.getenv("GOOGLE_API_KEY"))
+```
+
+### Add memory length control
+Change `limit=10` in `main.py` to send more/fewer past messages as context.
+
+---
+
+## TROUBLESHOOTING
+
+| Problem | Solution |
+|---|---|
+| Webhook verification fails | Check `VERIFY_TOKEN` matches exactly in `.env` and Meta dashboard |
+| Messages not received | Ensure you subscribed to `messages` webhook field in Meta |
+| Supabase errors | Make sure you're using `service_role` key, not `anon` key |
+| Cloud Run 500 errors | Check logs: `gcloud run logs read --service=whatsapp-chatbot` |
+| Bot not replying | Check Cloud Run logs for LangChain/OpenAI errors |
+
+---
+
+## COSTS (Estimate)
+
+| Service | Free Tier | Paid (approx) |
+|---|---|---|
+| Google Cloud Run | 2M req/month free | ~$0.40/1M req |
+| OpenAI GPT-4o-mini | — | ~$0.15/1M tokens |
+| Supabase | 500MB free | $25/month (Pro) |
+| WhatsApp API | 1000 conv/month free | $0.005–0.08/conversation |
+
+> For a small-medium bot (< 1000 users/day), total cost is typically **under $10/month**
